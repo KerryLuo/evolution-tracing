@@ -1,129 +1,141 @@
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
 from PIL import Image, ImageEnhance
+import base64
+from io import BytesIO
 
 st.set_page_config(page_title="Evolution Tracing Simulator", layout="wide")
 
 # -------------------------------------------------------
 # Load predetermined base image
 # -------------------------------------------------------
-BASE_IMAGE_PATH = "base_image.png"  # put this in the repo root
+BASE_IMAGE_PATH = "base_image.png"
 base_img = Image.open(BASE_IMAGE_PATH).convert("RGB")
 
 
 def dim_image(img, opacity=0.5):
-    """Visually dim the reference image (simulated 50% opacity)."""
     enhancer = ImageEnhance.Brightness(img)
     return enhancer.enhance(opacity)
 
 
 dimmed_base = dim_image(base_img.copy(), opacity=0.5)
 
+
 # -------------------------------------------------------
-# Drawing function using streamlit-drawable-canvas
+# HTML CANVAS (works 100% on Streamlit Cloud)
 # -------------------------------------------------------
-def draw_trace(reference_img, key):
+def draw_canvas(reference_img, key):
+    """Create an HTML5 drawing canvas with reference background."""
     w, h = reference_img.size
 
-    st.markdown(f"**Trace: {key}**")
+    # Convert reference image to base64 for embedding
+    buffer = BytesIO()
+    reference_img.save(buffer, format="PNG")
+    bg_b64 = base64.b64encode(buffer.getvalue()).decode()
 
-    canvas_result = st_canvas(
-        fill_color="rgba(0, 0, 0, 0)",  # transparent fill
-        stroke_width=4,
-        stroke_color="black",
-        background_color="#FFFFFF",
-        background_image=reference_img,  # the dimmed parent
-        update_streamlit=False,          # only update on interaction
-        height=h,
-        width=w,
-        drawing_mode="freedraw",
-        point_display_radius=0,
-        display_toolbar=False,           # no erase/undo toolbar
-        key=key,
-    )
+    # HTML
+    html = f"""
+    <style>
+      canvas {{
+        border: 1px solid #000;
+        background-image: url('data:image/png;base64,{bg_b64}');
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+        touch-action: none;
+      }}
+    </style>
 
-    if canvas_result.image_data is not None:
-        # canvas_result.image_data is a NumPy array (H, W, 4)
-        return Image.fromarray(canvas_result.image_data.astype("uint8")).convert("L")
+    <canvas id="{key}" width="{w}" height="{h}"></canvas>
+
+    <script>
+    const canvas = document.getElementById("{key}");
+    const ctx = canvas.getContext("2d");
+    let drawing = false;
+
+    canvas.addEventListener("pointerdown", () => drawing = true);
+    canvas.addEventListener("pointerup", () => drawing = false);
+    canvas.addEventListener("pointermove", function(e) {{
+        if (!drawing) return;
+        const rect = canvas.getBoundingClientRect();
+        ctx.lineWidth = 4;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "black";
+        ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+    }});
+
+    function saveImage() {{
+        const data = canvas.toDataURL("image/png");
+        const pyInput = document.getElementById("{key}_data");
+        pyInput.value = data;
+    }}
+    </script>
+
+    <button onclick="saveImage()">Save Drawing</button>
+    <textarea id="{key}_data" name="{key}_data" style="display:none"></textarea>
+    """
+
+    st.components.v1.html(html, height=h + 80)
+
+    # Get data saved via JS
+    data = st.session_state.get(f"{key}_data", None)
+    if data and data.startswith("data:image/png;base64,"):
+        b64 = data.split(",", 1)[1]
+        raw = base64.b64decode(b64)
+        return Image.open(BytesIO(raw)).convert("L")
 
     return None
+
+
+# Hook JavaScript values into Streamlit state
+def sync_js(key):
+    val = st.session_state.get(f"{key}_data", None)
+    return val
 
 
 # -------------------------------------------------------
 # App UI
 # -------------------------------------------------------
 st.title("✏️ Evolution Through Manual Tracing")
-st.write(
-    """
-Trace a simple lineart animal over multiple generations.
 
-- Start from a base image (Generation 0).
-- Each **parent** produces **two children** by tracing.
-- Each child becomes the parent of the next generation.
-- At the end, you see the whole **evolution family tree**.
-"""
-)
-
-# Initialize session state
 if "tree" not in st.session_state:
-    # Generation 0: just the base dimmed reference image
     st.session_state.tree = {0: [dimmed_base]}
 
-if "generations" not in st.session_state:
-    st.session_state.generations = 3
-
-# -------------------------------------------------------
-# Controls
-# -------------------------------------------------------
 st.header("1️⃣ Select number of generations")
-g = st.slider("Generations (binary branching)", 1, 6, st.session_state.generations)
+gens = st.slider("Generations", 1, 6, 3)
 
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("Start / Restart"):
-        st.session_state.generations = g
-        st.session_state.tree = {0: [dimmed_base]}
-        st.experimental_rerun()
+if st.button("Restart"):
+    st.session_state.tree = {0: [dimmed_base]}
+    st.experimental_rerun()
 
-with col2:
-    st.write(f"Current generations: **{st.session_state.generations}**")
-
-# -------------------------------------------------------
-# Build Generations
-# -------------------------------------------------------
 st.header("2️⃣ Trace each generation")
 
-for gen in range(st.session_state.generations):
+for gen in range(gens):
     st.subheader(f"Generation {gen}")
     parents = st.session_state.tree.get(gen, [])
     children = []
 
-    for i, parent_img in enumerate(parents):
-        st.markdown(f"### Parent {i + 1} (Gen {gen})")
-        st.image(parent_img, caption="Reference (dimmed parent)")
+    for i, parent in enumerate(parents):
+        st.image(parent, caption=f"Parent {i+1} (dimmed)")
+        key1 = f"G{gen}_P{i}_C1"
+        key2 = f"G{gen}_P{i}_C2"
 
-        # Two children traced from this parent
-        child1 = draw_trace(parent_img, f"G{gen}_P{i}_C1")
-        child2 = draw_trace(parent_img, f"G{gen}_P{i}_C2")
+        # Two children
+        child1 = draw_canvas(parent, key1)
+        child2 = draw_canvas(parent, key2)
 
-        if child1 is not None:
-            children.append(child1)
-        if child2 is not None:
-            children.append(child2)
+        if child1: children.append(child1)
+        if child2: children.append(child2)
 
-    if children:
-        st.session_state.tree[gen + 1] = children
+    st.session_state.tree[gen + 1] = children
 
-# -------------------------------------------------------
-# Family Tree Display
-# -------------------------------------------------------
 st.header("3️⃣ Family Tree")
 
-for gen, imgs in st.session_state.tree.items():
+for gen, images in st.session_state.tree.items():
     st.subheader(f"Generation {gen}")
-    cols = st.columns(min(4, len(imgs)))
-    for idx, img in enumerate(imgs):
-        with cols[idx % len(cols)]:
-            st.image(img, caption=f"G{gen}-{idx + 1}")
-            if st.button(f"🔍 Zoom G{gen}-{idx + 1}", key=f"zoom_{gen}_{idx}"):
-                st.image(img, caption=f"Zoomed G{gen}-{idx + 1}", width=800)
+    cols = st.columns(4)
+    for i, img in enumerate(images):
+        with cols[i % 4]:
+            st.image(img, caption=f"G{gen}-{i+1}")
