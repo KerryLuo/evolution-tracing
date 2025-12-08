@@ -8,14 +8,12 @@ st.set_page_config(page_title="Evolution Tracing Simulator", layout="wide")
 # Load predetermined base image
 # -------------------------------
 BASE_IMAGE_PATH = "base_image.png"
-base_img = Image.open(BASE_IMAGE_PATH).convert("RGBA")
+base_img = Image.open(BASE_IMAGE_PATH).convert("RGB")
 
-# Reduce opacity
+# Dim image (simulate 50% opacity visually)
 def dim_image(img, opacity=0.5):
-    alpha = img.split()[3]
-    alpha = ImageEnhance.Brightness(alpha).enhance(opacity)
-    img.putalpha(alpha)
-    return img
+    enhancer = ImageEnhance.Brightness(img)
+    return enhancer.enhance(opacity)
 
 dimmed_base = dim_image(base_img.copy(), opacity=0.5)
 
@@ -58,7 +56,6 @@ def draw_trace(reference_img, key):
 
     return None
 
-
 # --------------------------------
 # Main Evolution Loop
 # --------------------------------
@@ -86,13 +83,15 @@ for gen in range(st.session_state.generations):
     for i, parent_img in enumerate(parents):
         st.markdown(f"### Parent {i+1}")
 
-        st.image(parent_img, caption="Reference (50% opacity)")
+        st.image(parent_img, caption="Reference (50% dimmed)")
 
-        child1 = draw_trace(parent_img, f"Gen{gen}_Parent{i}_Child1")
-        child2 = draw_trace(parent_img, f"Gen{gen}_Parent{i}_Child2")
+        child1 = draw_trace(parent_img, f"Gen_{gen}_Parent_{i}_Child_1")
+        child2 = draw_trace(parent_img, f"Gen_{gen}_Parent_{i}_Child_2")
 
-        if child1: children.append(child1)
-        if child2: children.append(child2)
+        if child1:
+            children.append(child1)
+        if child2:
+            children.append(child2)
 
     if children:
         st.session_state.tree[gen + 1] = children
