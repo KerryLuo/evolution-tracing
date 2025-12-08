@@ -1,4 +1,4 @@
 streamlit
 pillow
 numpy
-streamlit-paint
+streamlit-drawable-canvas==0.9.3
