@@ -1,175 +1,239 @@
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 import requests
 from io import BytesIO
-import random
+from streamlit_drawable_canvas import st_canvas
 
-st.set_page_config(page_title="Drawing Evolution Simulator", layout="wide")
+st.set_page_config(page_title="Interactive Drawing Evolution", layout="wide")
+
+# Initialize session state
+if 'family_tree' not in st.session_state:
+    st.session_state.family_tree = []
+if 'current_generation' not in st.session_state:
+    st.session_state.current_generation = 0
+if 'current_parent_index' not in st.session_state:
+    st.session_state.current_parent_index = 0
+if 'current_child' not in st.session_state:
+    st.session_state.current_child = 1  # 1 or 2
+if 'original_img' not in st.session_state:
+    st.session_state.original_img = None
+if 'started' not in st.session_state:
+    st.session_state.started = False
 
 def load_image_from_url(url):
     """Load image from URL"""
     try:
         response = requests.get(url)
         img = Image.open(BytesIO(response.content))
-        return img.convert('RGB')
+        return img.convert('RGBA')
     except Exception as e:
         st.error(f"Error loading image: {e}")
         return None
 
-def trace_image(original_img, mutation_rate=0.15):
-    """
-    Simulate tracing an image with imperfections.
-    This adds noise, slight shifts, and edge detection variations.
-    """
-    img_array = np.array(original_img)
-    
-    # Add random noise to simulate hand tremor
-    noise = np.random.normal(0, mutation_rate * 30, img_array.shape)
-    traced = np.clip(img_array + noise, 0, 255).astype(np.uint8)
-    
-    # Apply slight blur (simulating imperfect tracing)
-    traced_img = Image.fromarray(traced)
-    traced_img = traced_img.filter(ImageFilter.GaussianBlur(radius=mutation_rate * 2))
-    
-    # Random shift (simulating positioning errors)
-    shift_x = random.randint(-int(mutation_rate * 10), int(mutation_rate * 10))
-    shift_y = random.randint(-int(mutation_rate * 10), int(mutation_rate * 10))
-    traced_img = traced_img.transform(
-        traced_img.size, 
-        Image.AFFINE, 
-        (1, 0, shift_x, 0, 1, shift_y)
-    )
-    
-    # Adjust brightness randomly
-    brightness_factor = 1 + random.uniform(-mutation_rate, mutation_rate)
-    traced_array = np.array(traced_img)
-    traced_array = np.clip(traced_array * brightness_factor, 0, 255).astype(np.uint8)
-    
-    return Image.fromarray(traced_array)
+def make_semi_transparent(img, opacity=0.5):
+    """Make image semi-transparent for tracing"""
+    img = img.copy()
+    alpha = img.split()[3] if img.mode == 'RGBA' else Image.new('L', img.size, 255)
+    alpha = alpha.point(lambda p: int(p * opacity))
+    img.putalpha(alpha)
+    return img
 
-def create_generation(parents, mutation_rate):
-    """Create next generation - each parent produces 2 children"""
-    children = []
-    for parent in parents:
-        # Each parent has 2 children
-        child1 = trace_image(parent, mutation_rate)
-        child2 = trace_image(parent, mutation_rate)
-        children.extend([child1, child2])
-    return children
+def start_evolution():
+    """Initialize evolution with original image"""
+    st.session_state.started = True
+    st.session_state.family_tree = [[st.session_state.original_img]]
+    st.session_state.current_generation = 0
+    st.session_state.current_parent_index = 0
+    st.session_state.current_child = 1
 
-def create_family_tree(original_img, num_generations, mutation_rate):
-    """Create complete family tree of traced images"""
-    tree = [[original_img]]  # Generation 0
-    
-    for gen in range(num_generations):
-        new_generation = create_generation(tree[-1], mutation_rate)
-        tree.append(new_generation)
-    
-    return tree
+def save_traced_child(canvas_result, parent_img):
+    """Save the traced drawing as a child"""
+    if canvas_result.image_data is not None:
+        # Get the drawing from canvas (RGB from RGBA)
+        traced_array = canvas_result.image_data[:, :, :3]
+        traced_img = Image.fromarray(traced_array.astype('uint8'), 'RGB')
+        
+        return traced_img
+    return None
 
-def display_generation(generation, gen_num, cols_per_row=4):
-    """Display a generation of images"""
-    st.subheader(f"Generation {gen_num} ({len(generation)} individuals)")
-    
-    cols = st.columns(cols_per_row)
-    for idx, img in enumerate(generation):
-        with cols[idx % cols_per_row]:
-            st.image(img, caption=f"Individual {idx + 1}", use_container_width=True)
-
-# Main App
-st.title("🎨 Drawing Evolution Simulator")
-st.markdown("""
-This app simulates how tracing a drawing repeatedly introduces small changes that accumulate over generations.
-Each "parent" produces 2 "children" through imperfect tracing.
-""")
-
-# Sidebar controls
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    image_url = st.text_input(
-        "Image URL", 
-        value="https://cataas.com/cat?width=400",
-        help="Paste a direct link to an image (JPG, PNG)"
-    )
-    
-    st.caption("💡 Try these URLs:")
-    st.caption("• https://cataas.com/cat?width=400")
-    st.caption("• https://picsum.photos/400")
-    st.caption("• https://loremflickr.com/400/400/cat")
-    
-    num_generations = st.slider(
-        "Number of Generations", 
-        min_value=1, 
-        max_value=5, 
-        value=3,
-        help="Warning: Higher generations create exponentially more images (2^n)"
-    )
-    
-    mutation_rate = st.slider(
-        "Mutation Rate",
-        min_value=0.05,
-        max_value=0.5,
-        value=0.15,
-        step=0.05,
-        help="Higher values = more dramatic changes per generation"
-    )
-    
-    img_size = st.slider(
-        "Image Size (px)",
-        min_value=100,
-        max_value=500,
-        value=300,
-        step=50
-    )
-    
-    run_simulation = st.button("🧬 Start Evolution", type="primary")
-
-# Display warning about exponential growth
-total_images = sum([2**i for i in range(num_generations + 1)])
-st.info(f"📊 This will generate **{total_images}** total images across {num_generations + 1} generations")
-
-if run_simulation:
-    with st.spinner("Loading original image..."):
-        original_img = load_image_from_url(image_url)
-    
-    if original_img:
-        # Resize image
-        original_img.thumbnail((img_size, img_size), Image.Resampling.LANCZOS)
+    if not st.session_state.started:
+        image_url = st.text_input(
+            "Image URL", 
+            value="https://cataas.com/cat?width=400",
+            help="Paste a direct link to an image"
+        )
         
-        with st.spinner(f"Evolving through {num_generations} generations..."):
-            family_tree = create_family_tree(original_img, num_generations, mutation_rate)
+        st.caption("💡 Try these URLs:")
+        st.caption("• https://cataas.com/cat?width=400")
+        st.caption("• https://picsum.photos/400")
+        st.caption("• https://loremflickr.com/400/400/cat")
         
-        st.success(f"✅ Evolution complete! Generated {total_images} images")
+        num_generations = st.slider(
+            "Number of Generations", 
+            min_value=1, 
+            max_value=4, 
+            value=2,
+            help="Each generation requires manual tracing"
+        )
+        
+        drawing_mode = st.selectbox(
+            "Drawing Tool",
+            ["freedraw", "line", "rect", "circle"]
+        )
+        
+        stroke_width = st.slider("Brush Size", 1, 25, 3)
+        stroke_color = st.color_picker("Brush Color", "#000000")
+        
+        canvas_width = 400
+        canvas_height = 400
+        
+        if st.button("🎨 Load Image & Start", type="primary"):
+            img = load_image_from_url(image_url)
+            if img:
+                # Resize to canvas size
+                img.thumbnail((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+                st.session_state.original_img = img
+                st.session_state.num_generations = num_generations
+                st.session_state.drawing_mode = drawing_mode
+                st.session_state.stroke_width = stroke_width
+                st.session_state.stroke_color = stroke_color
+                st.session_state.canvas_width = canvas_width
+                st.session_state.canvas_height = canvas_height
+                start_evolution()
+                st.rerun()
+    else:
+        st.success("✅ Evolution in progress!")
+        st.metric("Generation", st.session_state.current_generation)
+        
+        total_in_gen = 2 ** st.session_state.current_generation
+        st.metric("Parent", f"{st.session_state.current_parent_index + 1} of {total_in_gen}")
+        st.metric("Child", f"{st.session_state.current_child} of 2")
+        
+        if st.button("🔄 Start Over"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+# Main App
+st.title("🎨 Interactive Drawing Evolution Simulator")
+
+if not st.session_state.started:
+    st.markdown("""
+    ## How It Works:
+    1. Load an image from a URL
+    2. The image appears at **50% opacity** for you to trace over
+    3. Trace the image **twice** to create 2 children
+    4. Each child becomes a parent for the next generation
+    5. Watch how small differences accumulate over generations!
+    
+    **Your hand tremors and imperfections create the evolution!**
+    """)
+    st.info("👈 Configure settings in the sidebar and click 'Load Image & Start'")
+
+else:
+    # Check if we're done with all generations
+    if st.session_state.current_generation >= st.session_state.num_generations:
+        st.success("🎉 Evolution Complete!")
         
         # Display all generations
-        st.markdown("---")
-        for gen_num, generation in enumerate(family_tree):
-            if gen_num == 0:
-                st.subheader("🌱 Original Image (Generation 0)")
-                st.image(generation[0], width=img_size)
-            else:
-                display_generation(generation, gen_num, cols_per_row=min(4, len(generation)))
+        st.header("📊 Family Tree")
+        for gen_num, generation in enumerate(st.session_state.family_tree):
+            st.subheader(f"Generation {gen_num} ({len(generation)} individuals)")
+            cols = st.columns(min(4, len(generation)))
+            for idx, img in enumerate(generation):
+                with cols[idx % len(cols)]:
+                    st.image(img, caption=f"Individual {idx + 1}", use_container_width=True)
             st.markdown("---")
         
-        # Comparison section
-        st.header("📊 Compare First and Last Generation")
+        # Comparison
+        st.header("🔍 Compare Original vs Final Generation")
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Original")
-            st.image(family_tree[0][0], use_container_width=True)
+            st.image(st.session_state.family_tree[0][0], use_container_width=True)
         with col2:
-            st.subheader(f"Final Generation Sample")
-            # Show first individual from last generation
-            st.image(family_tree[-1][0], use_container_width=True)
+            st.subheader("Final Generation Sample")
+            st.image(st.session_state.family_tree[-1][0], use_container_width=True)
+    
+    else:
+        # Get current parent to trace
+        current_gen = st.session_state.family_tree[st.session_state.current_generation]
+        parent_img = current_gen[st.session_state.current_parent_index]
+        
+        st.header(f"🖌️ Generation {st.session_state.current_generation + 1}")
+        st.subheader(f"Trace Parent {st.session_state.current_parent_index + 1} - Child {st.session_state.current_child}")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.info("👇 The parent image is shown at 50% opacity. Trace over it with your mouse/stylus!")
+            
+            # Make parent semi-transparent for tracing
+            bg_img = make_semi_transparent(parent_img, opacity=0.5)
+            
+            # Create canvas with semi-transparent background
+            canvas_result = st_canvas(
+                fill_color="rgba(255, 255, 255, 0)",
+                stroke_width=st.session_state.stroke_width,
+                stroke_color=st.session_state.stroke_color,
+                background_image=bg_img,
+                update_streamlit=True,
+                height=st.session_state.canvas_height,
+                width=st.session_state.canvas_width,
+                drawing_mode=st.session_state.drawing_mode,
+                key=f"canvas_gen{st.session_state.current_generation}_parent{st.session_state.current_parent_index}_child{st.session_state.current_child}",
+            )
+            
+            col_a, col_b, col_c = st.columns(3)
+            
+            with col_a:
+                if st.button("✅ Save This Child", type="primary"):
+                    traced_img = save_traced_child(canvas_result, parent_img)
+                    if traced_img:
+                        # Initialize new generation if needed
+                        if len(st.session_state.family_tree) <= st.session_state.current_generation + 1:
+                            st.session_state.family_tree.append([])
+                        
+                        # Add child to next generation
+                        st.session_state.family_tree[st.session_state.current_generation + 1].append(traced_img)
+                        
+                        # Move to next child or parent
+                        if st.session_state.current_child == 1:
+                            st.session_state.current_child = 2
+                        else:
+                            st.session_state.current_child = 1
+                            st.session_state.current_parent_index += 1
+                            
+                            # Check if we're done with this generation
+                            if st.session_state.current_parent_index >= len(current_gen):
+                                st.session_state.current_generation += 1
+                                st.session_state.current_parent_index = 0
+                        
+                        st.rerun()
+                    else:
+                        st.error("Please draw something first!")
+            
+            with col_b:
+                if st.button("🗑️ Clear Canvas"):
+                    st.rerun()
+        
+        with col2:
+            st.write("**Original Parent (100% opacity):**")
+            st.image(parent_img, use_container_width=True)
+            
+            st.write("**Progress:**")
+            total_traces_needed = sum([2 ** i * 2 for i in range(st.session_state.num_generations)])
+            traces_completed = sum([len(gen) for gen in st.session_state.family_tree[1:]])
+            st.progress(traces_completed / total_traces_needed)
+            st.caption(f"{traces_completed} of {total_traces_needed} traces completed")
 
-else:
-    st.info("👆 Configure settings in the sidebar and click 'Start Evolution' to begin!")
-
-# Footer
 st.markdown("---")
 st.markdown("""
-**How it works:** Each generation, every parent produces 2 children through imperfect tracing. 
-The tracing process adds noise, blur, positioning errors, and brightness variations that accumulate over generations.
+**Tip:** Your natural hand movements create unique variations! Try tracing quickly vs slowly, 
+or with different levels of detail to see how it affects evolution.
 """)
