@@ -166,13 +166,11 @@ if not st.session_state.started:
     
     ---
     
-    ### ⏱️ Time Commitment: ~10 minutes
+    ### ⏱️ Time Commitment
     
     - 2 generations = ~5 minutes (6 tracings)
     - 3 generations = ~10 minutes (14 tracings)
     - Each tracing takes about 30-60 seconds
-    
-    **Ready to experience evolution?**
     
     👈 **Configure your experiment in the sidebar and click 'Load Image & Start'**
     """)
@@ -395,5 +393,4 @@ This is evolution made visceral, human, and real.
 - Each child should be slightly different (do not copy-paste)
 - Your natural hand variations create the evolution
 
-"Nothing in biology makes sense except in the light of evolution." (Theodosius Dobzhansky)
 """)
