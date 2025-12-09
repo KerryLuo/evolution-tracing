@@ -1,141 +1,170 @@
 import streamlit as st
-from PIL import Image, ImageEnhance
-import base64
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter
+import requests
 from io import BytesIO
+import random
 
-st.set_page_config(page_title="Evolution Tracing Simulator", layout="wide")
+st.set_page_config(page_title="Drawing Evolution Simulator", layout="wide")
 
-# -------------------------------------------------------
-# Load predetermined base image
-# -------------------------------------------------------
-BASE_IMAGE_PATH = "base_image.png"
-base_img = Image.open(BASE_IMAGE_PATH).convert("RGB")
+def load_image_from_url(url):
+    """Load image from URL"""
+    try:
+        response = requests.get(url)
+        img = Image.open(BytesIO(response.content))
+        return img.convert('RGB')
+    except Exception as e:
+        st.error(f"Error loading image: {e}")
+        return None
 
-
-def dim_image(img, opacity=0.5):
-    enhancer = ImageEnhance.Brightness(img)
-    return enhancer.enhance(opacity)
-
-
-dimmed_base = dim_image(base_img.copy(), opacity=0.5)
-
-
-# -------------------------------------------------------
-# HTML CANVAS (works 100% on Streamlit Cloud)
-# -------------------------------------------------------
-def draw_canvas(reference_img, key):
-    """Create an HTML5 drawing canvas with reference background."""
-    w, h = reference_img.size
-
-    # Convert reference image to base64 for embedding
-    buffer = BytesIO()
-    reference_img.save(buffer, format="PNG")
-    bg_b64 = base64.b64encode(buffer.getvalue()).decode()
-
-    # HTML
-    html = f"""
-    <style>
-      canvas {{
-        border: 1px solid #000;
-        background-image: url('data:image/png;base64,{bg_b64}');
-        background-size: contain;
-        background-repeat: no-repeat;
-        background-position: center;
-        touch-action: none;
-      }}
-    </style>
-
-    <canvas id="{key}" width="{w}" height="{h}"></canvas>
-
-    <script>
-    const canvas = document.getElementById("{key}");
-    const ctx = canvas.getContext("2d");
-    let drawing = false;
-
-    canvas.addEventListener("pointerdown", () => drawing = true);
-    canvas.addEventListener("pointerup", () => drawing = false);
-    canvas.addEventListener("pointermove", function(e) {{
-        if (!drawing) return;
-        const rect = canvas.getBoundingClientRect();
-        ctx.lineWidth = 4;
-        ctx.lineCap = "round";
-        ctx.strokeStyle = "black";
-        ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
-    }});
-
-    function saveImage() {{
-        const data = canvas.toDataURL("image/png");
-        const pyInput = document.getElementById("{key}_data");
-        pyInput.value = data;
-    }}
-    </script>
-
-    <button onclick="saveImage()">Save Drawing</button>
-    <textarea id="{key}_data" name="{key}_data" style="display:none"></textarea>
+def trace_image(original_img, mutation_rate=0.15):
     """
+    Simulate tracing an image with imperfections.
+    This adds noise, slight shifts, and edge detection variations.
+    """
+    img_array = np.array(original_img)
+    
+    # Add random noise to simulate hand tremor
+    noise = np.random.normal(0, mutation_rate * 30, img_array.shape)
+    traced = np.clip(img_array + noise, 0, 255).astype(np.uint8)
+    
+    # Apply slight blur (simulating imperfect tracing)
+    traced_img = Image.fromarray(traced)
+    traced_img = traced_img.filter(ImageFilter.GaussianBlur(radius=mutation_rate * 2))
+    
+    # Random shift (simulating positioning errors)
+    shift_x = random.randint(-int(mutation_rate * 10), int(mutation_rate * 10))
+    shift_y = random.randint(-int(mutation_rate * 10), int(mutation_rate * 10))
+    traced_img = traced_img.transform(
+        traced_img.size, 
+        Image.AFFINE, 
+        (1, 0, shift_x, 0, 1, shift_y)
+    )
+    
+    # Adjust brightness randomly
+    brightness_factor = 1 + random.uniform(-mutation_rate, mutation_rate)
+    traced_array = np.array(traced_img)
+    traced_array = np.clip(traced_array * brightness_factor, 0, 255).astype(np.uint8)
+    
+    return Image.fromarray(traced_array)
 
-    st.components.v1.html(html, height=h + 80)
-
-    # Get data saved via JS
-    data = st.session_state.get(f"{key}_data", None)
-    if data and data.startswith("data:image/png;base64,"):
-        b64 = data.split(",", 1)[1]
-        raw = base64.b64decode(b64)
-        return Image.open(BytesIO(raw)).convert("L")
-
-    return None
-
-
-# Hook JavaScript values into Streamlit state
-def sync_js(key):
-    val = st.session_state.get(f"{key}_data", None)
-    return val
-
-
-# -------------------------------------------------------
-# App UI
-# -------------------------------------------------------
-st.title("✏️ Evolution Through Manual Tracing")
-
-if "tree" not in st.session_state:
-    st.session_state.tree = {0: [dimmed_base]}
-
-st.header("1️⃣ Select number of generations")
-gens = st.slider("Generations", 1, 6, 3)
-
-if st.button("Restart"):
-    st.session_state.tree = {0: [dimmed_base]}
-    st.experimental_rerun()
-
-st.header("2️⃣ Trace each generation")
-
-for gen in range(gens):
-    st.subheader(f"Generation {gen}")
-    parents = st.session_state.tree.get(gen, [])
+def create_generation(parents, mutation_rate):
+    """Create next generation - each parent produces 2 children"""
     children = []
+    for parent in parents:
+        # Each parent has 2 children
+        child1 = trace_image(parent, mutation_rate)
+        child2 = trace_image(parent, mutation_rate)
+        children.extend([child1, child2])
+    return children
 
-    for i, parent in enumerate(parents):
-        st.image(parent, caption=f"Parent {i+1} (dimmed)")
-        key1 = f"G{gen}_P{i}_C1"
-        key2 = f"G{gen}_P{i}_C2"
+def create_family_tree(original_img, num_generations, mutation_rate):
+    """Create complete family tree of traced images"""
+    tree = [[original_img]]  # Generation 0
+    
+    for gen in range(num_generations):
+        new_generation = create_generation(tree[-1], mutation_rate)
+        tree.append(new_generation)
+    
+    return tree
 
-        # Two children
-        child1 = draw_canvas(parent, key1)
-        child2 = draw_canvas(parent, key2)
+def display_generation(generation, gen_num, cols_per_row=4):
+    """Display a generation of images"""
+    st.subheader(f"Generation {gen_num} ({len(generation)} individuals)")
+    
+    cols = st.columns(cols_per_row)
+    for idx, img in enumerate(generation):
+        with cols[idx % cols_per_row]:
+            st.image(img, caption=f"Individual {idx + 1}", use_container_width=True)
 
-        if child1: children.append(child1)
-        if child2: children.append(child2)
+# Main App
+st.title("🎨 Drawing Evolution Simulator")
+st.markdown("""
+This app simulates how tracing a drawing repeatedly introduces small changes that accumulate over generations.
+Each "parent" produces 2 "children" through imperfect tracing.
+""")
 
-    st.session_state.tree[gen + 1] = children
+# Sidebar controls
+with st.sidebar:
+    st.header("⚙️ Settings")
+    
+    image_url = st.text_input(
+        "Image URL", 
+        value="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/400px-Cat03.jpg",
+        help="Paste a direct link to an image (JPG, PNG)"
+    )
+    
+    num_generations = st.slider(
+        "Number of Generations", 
+        min_value=1, 
+        max_value=5, 
+        value=3,
+        help="Warning: Higher generations create exponentially more images (2^n)"
+    )
+    
+    mutation_rate = st.slider(
+        "Mutation Rate",
+        min_value=0.05,
+        max_value=0.5,
+        value=0.15,
+        step=0.05,
+        help="Higher values = more dramatic changes per generation"
+    )
+    
+    img_size = st.slider(
+        "Image Size (px)",
+        min_value=100,
+        max_value=500,
+        value=300,
+        step=50
+    )
+    
+    run_simulation = st.button("🧬 Start Evolution", type="primary")
 
-st.header("3️⃣ Family Tree")
+# Display warning about exponential growth
+total_images = sum([2**i for i in range(num_generations + 1)])
+st.info(f"📊 This will generate **{total_images}** total images across {num_generations + 1} generations")
 
-for gen, images in st.session_state.tree.items():
-    st.subheader(f"Generation {gen}")
-    cols = st.columns(4)
-    for i, img in enumerate(images):
-        with cols[i % 4]:
-            st.image(img, caption=f"G{gen}-{i+1}")
+if run_simulation:
+    with st.spinner("Loading original image..."):
+        original_img = load_image_from_url(image_url)
+    
+    if original_img:
+        # Resize image
+        original_img.thumbnail((img_size, img_size), Image.Resampling.LANCZOS)
+        
+        with st.spinner(f"Evolving through {num_generations} generations..."):
+            family_tree = create_family_tree(original_img, num_generations, mutation_rate)
+        
+        st.success(f"✅ Evolution complete! Generated {total_images} images")
+        
+        # Display all generations
+        st.markdown("---")
+        for gen_num, generation in enumerate(family_tree):
+            if gen_num == 0:
+                st.subheader("🌱 Original Image (Generation 0)")
+                st.image(generation[0], width=img_size)
+            else:
+                display_generation(generation, gen_num, cols_per_row=min(4, len(generation)))
+            st.markdown("---")
+        
+        # Comparison section
+        st.header("📊 Compare First and Last Generation")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Original")
+            st.image(family_tree[0][0], use_container_width=True)
+        with col2:
+            st.subheader(f"Final Generation Sample")
+            # Show first individual from last generation
+            st.image(family_tree[-1][0], use_container_width=True)
+
+else:
+    st.info("👆 Configure settings in the sidebar and click 'Start Evolution' to begin!")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+**How it works:** Each generation, every parent produces 2 children through imperfect tracing. 
+The tracing process adds noise, blur, positioning errors, and brightness variations that accumulate over generations.
+""")
