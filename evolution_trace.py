@@ -90,9 +90,14 @@ with st.sidebar:
     
     image_url = st.text_input(
         "Image URL", 
-        value="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/400px-Cat03.jpg",
+        value="https://cataas.com/cat?width=400",
         help="Paste a direct link to an image (JPG, PNG)"
     )
+    
+    st.caption("💡 Try these URLs:")
+    st.caption("• https://cataas.com/cat?width=400")
+    st.caption("• https://picsum.photos/400")
+    st.caption("• https://loremflickr.com/400/400/cat")
     
     num_generations = st.slider(
         "Number of Generations", 
